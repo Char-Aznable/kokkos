@@ -47,6 +47,8 @@
 #include <Kokkos_Macros.hpp>
 #include <cstdint>
 #include <type_traits>
+#include <climits>
+#include <limits>
 
 //----------------------------------------------------------------------------
 //----------------------------------------------------------------------------
@@ -411,6 +413,122 @@ struct inclusive_scan_integer_sequence
 
 template <typename T>
 using identity_t = T;
+
+/* --------------------------------------------------------------------------*/
+/**
+ * @Synopsis  Add a constant offset to an index sequence
+ *
+ * The cumbersome partial specialization can be avoided if c++14 is enabled
+ *
+ * @tparam offset constant offset added to each element of the sequence
+ * @tparam class Sequence class to be specialize
+ */
+/* ----------------------------------------------------------------------------*/
+template < std::size_t offset, class > struct AddToSequence {};
+
+/* --------------------------------------------------------------------------*/
+/**
+ * @Synopsis  Add a constant offset to a Kokkos::Impl::index_sequence
+ *
+ * Provide a nested Type that define the resulting sequence
+ *
+ * @tparam offset constant offset added to each element of the sequence
+ * @tparam I Input Sequence
+ */
+/* ----------------------------------------------------------------------------*/
+template < std::size_t offset, std::size_t ... I >
+struct AddToSequence<offset, Kokkos::Impl::index_sequence<I...>> {
+  using Type = Kokkos::Impl::index_sequence<offset+I...>;
+};
+
+/* --------------------------------------------------------------------------*/
+/**
+ * @Synopsis  Get the 2^k, where k is the place of the lowest set bit in i 
+ *
+ * @tparam T Input integer type
+ * @Param i Input integer whose bit pattern is examined
+ *
+ * @Returns  2^k 
+ */
+/* ----------------------------------------------------------------------------*/
+template < class T > KOKKOS_INLINE_FUNCTION
+constexpr typename std::enable_if<std::is_integral<T>::value, T>::type 
+lstpowerof2(const T& i) { return i & (~i+1); }
+
+/* --------------------------------------------------------------------------*/
+/**
+ * @Synopsis  Count the total number of set bit in the input 
+ *
+ * @tparam T Input integer type
+ * @Param i Input integer whose bit pattern is examined 
+ *
+ * @Returns  Total number of set bit in i 
+ */
+/* ----------------------------------------------------------------------------*/
+template < class T > KOKKOS_INLINE_FUNCTION
+constexpr typename std::enable_if<std::is_integral<T>::value, T>::type 
+countSetBits(const T& i) {
+  return lstpowerof2(i) ? 1 + countSetBits(i & i-1) : 0; 
+}
+
+/* --------------------------------------------------------------------------*/
+/**
+ * @Synopsis  Get 2^k, where k is the index of the place of the j'th (counting
+ * from least- to most-significant or right to left) set (non-zero) bit in i 
+ *
+ * For example, if i == 0b11010101, there are 5 set bits in i,  then
+ * powerof2(i,4) == 2^8, powerof2(i,3) == 2^7, powerof2(i,2) == 2^5, 
+ * , powerof2(i,1) == 2^2 and powerof2(i,0) == 2^0
+ *
+ * @tparam T Input integer type
+ * @Param i The input integer number whose set bits are examined
+ * @Param j Index of the set bit counting from right to left, i.e., the least 
+ * significant set bit is 0, the next set bit is 1, ... 
+ *
+ * @Returns  2^k 
+ */
+/* ----------------------------------------------------------------------------*/
+template < class T > KOKKOS_INLINE_FUNCTION
+constexpr typename std::enable_if<std::is_integral<T>::value, T>::type 
+powerof2(const T& i, const T& j) {
+  return j ? powerof2(i & i-1, j-1) : i & (~i+1);
+}
+
+/* --------------------------------------------------------------------------*/
+/**
+ * @Synopsis Type of input indices to be encoded 
+ *
+ * For now, all indices assume same type 
+ *
+ * @tparam nBits Number of bit in the integer index
+ *
+ */
+/* ----------------------------------------------------------------------------*/
+template < std::size_t nBits >
+using UINT = 
+  typename std::conditional<(nBits <= std::numeric_limits<uint8_t>::digits), uint8_t,
+  typename std::conditional<(nBits <= std::numeric_limits<uint16_t>::digits), uint16_t,
+  typename std::conditional<(nBits <= std::numeric_limits<uint32_t>::digits), uint32_t,
+  typename std::conditional<(nBits <= std::numeric_limits<uint64_t>::digits), uint64_t, void>
+  ::type>::type>::type>::type;
+
+/* --------------------------------------------------------------------------*/
+/**
+ * @Synopsis  Insert some number of 0 between every two neighboring bits in
+ * an input integer
+ * @tparam T Input integer type
+ * @Param i The input integer number 
+ * @Param nZeros Number of 0's to be inserted
+ * @Param nBits Number of bits of the input integer type
+ *
+ * @Returns  A 64-bit unsigned integer resulting from inserting 0's 
+ */
+/* ----------------------------------------------------------------------------*/
+template < class T > KOKKOS_INLINE_FUNCTION
+constexpr typename std::enable_if<std::is_integral<T>::value, UINT<64>>::type 
+insertZeros(const T& i, const T& nZeros, const T& nBits = sizeof(T)*CHAR_BIT) {
+  return i & T{1} | (nBits == 1 ? 0 : insertZeros<T>(i >> 1, nZeros, nBits-1) << nZeros+1);
+}
 
 }} // namespace Kokkos::Impl
 

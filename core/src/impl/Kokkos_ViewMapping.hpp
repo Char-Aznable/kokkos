@@ -57,6 +57,8 @@
 #if defined(KOKKOS_ENABLE_PROFILING)
 #include <impl/Kokkos_Profiling_Interface.hpp>
 #endif
+#include <algorithm>
+#include <tuple>
 
 //----------------------------------------------------------------------------
 //----------------------------------------------------------------------------
@@ -1837,6 +1839,464 @@ public:
                    , "ViewOffset subview construction requires compatible rank" );
 */
     }
+};
+
+
+//----------------------------------------------------------------------------
+// LayoutMortonRight AND ( 1 < rank AND 0 < rank_dynamic )
+template < class Dimension, std::size_t mBegin >
+struct ViewOffset< Dimension , Kokkos::LayoutMortonRight<mBegin>
+                 , typename std::enable_if<( 1 < Dimension::rank
+                                             &&
+                                             0 < Dimension::rank_dynamic
+                                           )>::type >
+{
+  using is_mapping_plugin = std::true_type ;
+  using is_regular        = std::false_type ;
+
+  typedef size_t               size_type ;
+  typedef Dimension            dimension_type ;
+  typedef Kokkos::LayoutMortonRight<mBegin>  array_layout ;
+
+  /* --------------------------------------------------------------------------*/
+  /**
+   * @Synopsis  Number of bits in each of the index
+   */
+  /* ----------------------------------------------------------------------------*/
+  static constexpr std::size_t nBitsIndex = 8;
+
+  /* --------------------------------------------------------------------------*/
+  /**
+   * @Synopsis  Number of elements for the element in the lookup table  
+   *
+   * For now, this has to be the same as nBitsIndex. TODO: extent the algorithm
+   * so that we can look up nBitsEntry as a trunk
+   */
+  /* ----------------------------------------------------------------------------*/
+  static constexpr std::size_t nBitsEntry = nBitsIndex;
+
+  /* --------------------------------------------------------------------------*/
+  /**
+   * @Synopsis  Number of elements in each row of the lookup table
+   */
+  /* ----------------------------------------------------------------------------*/
+  static constexpr std::size_t rowSizeTable = 1u << nBitsEntry;
+
+  /* --------------------------------------------------------------------------*/
+  /**
+   * @Synopsis  Number of bits representing the Morton code
+   */
+  /* ----------------------------------------------------------------------------*/
+  static constexpr std::size_t nBitsEncode = 64;
+
+  using Index = Kokkos::Impl::UINT<nBitsIndex>;
+  using Encode = Kokkos::Impl::UINT<nBitsEncode>;
+
+  /* --------------------------------------------------------------------------*/
+  /**
+   * @Synopsis Rank corresponding to the number of Morton encoded dimensions
+   */
+  /* ----------------------------------------------------------------------------*/
+  static constexpr std::size_t rankMorton = Dimension::rank - mBegin;
+
+  static_assert(rankMorton >= 2, "At least the last two dimension should be Morton encoded");
+
+  /* --------------------------------------------------------------------------*/
+  /**
+   * @Synopsis  Rank corresponding to the number of dimensions not encoded
+   */
+  /* ----------------------------------------------------------------------------*/
+  static constexpr std::size_t rankNonMorton = mBegin;
+  
+  static_assert(nBitsIndex*rankMorton <= nBitsEncode, "Not enough bits to encode Morton curve"); 
+
+  dimension_type m_dim ;
+  size_type      m_stride ;
+
+  /* --------------------------------------------------------------------------*/
+  /**
+   * @Synopsis  Sizes of each non-encoded dimension
+   */
+  /* ----------------------------------------------------------------------------*/
+  const size_type extents[rankNonMorton];
+
+  /* --------------------------------------------------------------------------*/
+  /**
+   * @Synopsis  Sizes of the encoded dimension
+   */
+  /* ----------------------------------------------------------------------------*/
+  const Index extentsMorton[rankMorton];
+
+  /* --------------------------------------------------------------------------*/
+  /**
+   * @Synopsis  Reversed Exclusive prefix sum of the sizes of the encoded dimensions 
+   *
+   * For example, if we have a 10 x 20 x 30 x 40 view whose 2-, 3- and 4-th dimensions
+   * are Morton encoded, then extentsExScan is the reverse of the exclusive prefix sum
+   * of {40, 30, 20}, i.e., the reverse of {1, 40, 40*30}, or {40*30,40,1}
+   */
+  /* ----------------------------------------------------------------------------*/
+  const size_type extentsExScan[rankMorton];
+
+  /* --------------------------------------------------------------------------*/
+  /**
+   * @Synopsis  Stride over all the encoded dimension
+   */
+  /* ----------------------------------------------------------------------------*/
+  const size_type strideMorton;
+  
+  /* --------------------------------------------------------------------------*/
+  /**
+   * @Synopsis  Number of blocks of each encoded dimension
+   */
+  /* ----------------------------------------------------------------------------*/
+  const Index nBlocks[rankMorton];
+
+  /* --------------------------------------------------------------------------*/
+  /**
+   * @Synopsis  Power-of-2 block size of each encoded dimension
+   *
+   * Basically, this contains the decomposition of the size of each dimension 
+   * into power of 2. For example, if the encoded dimensions are (2,3,4) and 
+   * nBitsIndex == 3, then we have: blockExtents = {{2,0,0}, {2,1,0}, {4,0,0}}. 
+   * Any dimension that needs fewer than nBitsIndex to encode is padded with zero.
+   */
+  /* ----------------------------------------------------------------------------*/
+  const Index blockExtents[rankMorton][nBitsIndex];
+
+  /* --------------------------------------------------------------------------*/
+  /**
+   * @Synopsis Inclusive prefix sum of blockExtents 
+   */
+  /* ----------------------------------------------------------------------------*/
+  const Index blockExtentsIncSum[rankMorton][nBitsIndex];
+
+  /* --------------------------------------------------------------------------*/
+  /**
+   * @Synopsis Exclusive prefix sum of blockExtents 
+   */
+  /* ----------------------------------------------------------------------------*/
+  const Index blockExtentsExcSum[rankMorton][nBitsIndex];
+
+  /* --------------------------------------------------------------------------*/
+  /**
+   * @Synopsis Bit mask for each block of each dimension indicating the bits 
+   * contributed to the encoding 
+   */
+  /* ----------------------------------------------------------------------------*/
+  const Index blockMasks[rankMorton][nBitsIndex];
+
+  /* --------------------------------------------------------------------------*/
+  /**
+   * @Synopsis Number of bits contributed to the encoding for each block of each
+   * dimension 
+   */
+  /* ----------------------------------------------------------------------------*/
+  const Index blockNBits[rankMorton][nBitsIndex];
+
+  /* --------------------------------------------------------------------------*/
+  /**
+   * @Synopsis  Lookup table whose entry (i,j) is the j'th bit pattern (out of 
+   * a total of 2^nBitsEntry) 
+   * 
+   */
+  /* ----------------------------------------------------------------------------*/
+  const Index table[rankMorton][rowSizeTable];
+
+private:
+
+  using NonMortonSubset = Kokkos::Impl::make_index_sequence<rankNonMorton>;
+  using MortonIndices = Kokkos::Impl::make_index_sequence<rankMorton>;
+  using MortonSubset = typename Kokkos::Impl::AddToSequence<mBegin,MortonIndices>::Type;
+
+  /* --------------------------------------------------------------------------*/
+  /**
+   * @Synopsis  Get the offset of a encoded slice 
+   *
+   * For example, if rankNonMorton == 4, This is equivalent to:
+   * strideMorton * ( i3 + N3 * ( i2 + N2 * (i1 + N1 * i0) ) ) or 
+   * strideMorton * (i3 + i2*N3 + i1*N2*N3 + i0*N1*N2*N3)
+   *
+   * @tparam T std::tuple<> of indices as the input to ViewOffset<>::operator()
+   * @tparam i Index sequence corresponding to the non-encoded dimensions
+   * @Param t std::tuple<> of indices as the input to ViewOffset<>::operator()
+   * @Param Kokkos::Impl::index_sequence Index sequence corresponding to the 
+   * non-encoded dimensions
+   *
+   * @Returns  Offset of the encoded slice 
+   */
+  /* ----------------------------------------------------------------------------*/
+  template < class T, std::size_t ... i > KOKKOS_INLINE_FUNCTION 
+  typename std::enable_if<std::is_same<Kokkos::Impl::index_sequence<i...>,
+    NonMortonSubset>::value,Encode>::type 
+  getOffset(T&& t, Kokkos::Impl::index_sequence<i...>) const
+  {
+    using Swallow = Encode[];
+    //Assume i... begins with 0
+    const Swallow s = { (i ? std::get<i>(std::forward<T>(t)) + extents[i]*s[i-1] : 
+      std::get<i>(std::forward<T>(t)))... };
+    return strideMorton * s[sizeof...(i)-1];
+  }
+
+  template < class T, std::size_t ... i, std::size_t ... I > KOKKOS_INLINE_FUNCTION 
+  typename std::enable_if<std::is_same<Kokkos::Impl::index_sequence<i...>,
+    MortonSubset>::value && std::is_same<Kokkos::Impl::index_sequence<I...>, 
+    MortonIndices>::value, Encode>::type 
+  encode(T&& t, Kokkos::Impl::index_sequence<i...>, Kokkos::Impl::index_sequence<I...>) const
+  {
+    //Compute the linear offset of the encoded dimensions in the whole span of this array 
+    const Encode rankOffset = getOffset(std::forward<T>(t),NonMortonSubset());
+    //Compute the linear offset within the current block
+    const Index indices[] = {std::get<i>(std::forward<T>(t))...};
+    const Index iBlocks[] = {findBlock(indices[I],I)...};
+    //Promote the type here to avoid overflow
+    const Encode iOffsets[] = {blockExtentsExcSum[I][iBlocks[I]]...};
+    const Encode iBlockSizes[] = {blockExtents[I][iBlocks[I]]...};
+    const Encode iBlockSizesCumProd[] = { (I ? iBlockSizes[I-1]*iBlockSizesCumProd[I-1] : 1)... };
+    const Encode dotProduct[] = { (iOffsets[I]*extentsExScan[I]*iBlockSizesCumProd[I]+
+      (I ? dotProduct[I-1] :0))... };
+    const Encode blockOffset = dotProduct[sizeof...(I)-1];
+    //Remove the upper bits for each dimension corresponding to the previous blocks
+    //These are the bits to be interleaved
+    Index iBits[] = {(indices[I]-iOffsets[I])...};
+    //Mask for how many bits to contribute
+    Index iMasks[] = {blockMasks[I][iBlocks[I]]...};
+    //Total number of bits in the maks
+    Index iNBits[] = {blockNBits[I][iBlocks[I]]...};
+
+    //Iteratively interleave the indices until no bits left
+    //number of bit places at the end of last iteration
+    size_type nPlaces = 0;
+    Encode ans = 0;
+    while(true) {
+      //How many dimensions contributing to the interleaving
+      size_type nDim = sizeof...(I);
+      //common mask this iteration
+      Index mask = ~Index{0};
+      //number of bits in the mask
+      Index nBits = nBitsIndex;
+      //Get the common mask
+      for(size_type iDim = 0; iDim < sizeof...(I); ++iDim) {
+        if(iMasks[iDim] == 0) {
+          --nDim;
+        } else {
+          mask &= iMasks[iDim];
+          nBits = std::min(iNBits[iDim],nBits);
+        }
+      }
+      if(nDim == 0) { break; }
+      size_type nDimRemaining = nDim;
+      //Interleave the bits -- the order conforms to right layout
+      //where a dimension with smaller index contributes bits
+      //to higher places in the results than any other dimension 
+      //with larger index. For example, if iBits == {100, 001, 010}, 
+      //ans = 0b100001010 
+      for(size_type iDim = 0; iDim < sizeof...(I); ++iDim) {
+        //Skip the dimensions that are not contributing 
+        if(iNBits[iDim] == 0) { continue; }
+        --nDimRemaining;
+        //This check help skip splitting 0 integer -- note that
+        //it can still contribute bits even if iBits[iDim] == 0
+        if(iBits[iDim] != 0) {
+          ans |= Encode(table[nDim][iBits[iDim]&mask] << (nPlaces+nDimRemaining));
+        }
+        iBits[iDim] = iBits[iDim] >> nBits;
+        iMasks[iDim] = iMasks[iDim] >> nBits;
+        iNBits[iDim] -= nBits;
+      }
+      nPlaces += nDim*nBits;
+    }
+    return ans + blockOffset + rankOffset; 
+  }
+
+
+public:
+
+  //----------------------------------------
+  template< class ... I > KOKKOS_INLINE_FUNCTION 
+  constexpr Encode operator()( const I&... i ) const {
+    return encode(std::make_tuple(i...),MortonSubset{},MortonIndices{});
+  }
+
+  //----------------------------------------
+
+  KOKKOS_INLINE_FUNCTION
+  constexpr array_layout layout() const
+    {
+      return array_layout( m_dim.N0 , m_dim.N1 , m_dim.N2 , m_dim.N3
+                         , m_dim.N4 , m_dim.N5 , m_dim.N6 , m_dim.N7 );
+    }
+
+  KOKKOS_INLINE_FUNCTION constexpr size_type dimension_0() const { return m_dim.N0 ; }
+  KOKKOS_INLINE_FUNCTION constexpr size_type dimension_1() const { return m_dim.N1 ; }
+  KOKKOS_INLINE_FUNCTION constexpr size_type dimension_2() const { return m_dim.N2 ; }
+  KOKKOS_INLINE_FUNCTION constexpr size_type dimension_3() const { return m_dim.N3 ; }
+  KOKKOS_INLINE_FUNCTION constexpr size_type dimension_4() const { return m_dim.N4 ; }
+  KOKKOS_INLINE_FUNCTION constexpr size_type dimension_5() const { return m_dim.N5 ; }
+  KOKKOS_INLINE_FUNCTION constexpr size_type dimension_6() const { return m_dim.N6 ; }
+  KOKKOS_INLINE_FUNCTION constexpr size_type dimension_7() const { return m_dim.N7 ; }
+
+  /* Cardinality of the domain index space */
+  KOKKOS_INLINE_FUNCTION
+  constexpr size_type size() const
+    { return m_dim.N0 * m_dim.N1 * m_dim.N2 * m_dim.N3 * m_dim.N4 * m_dim.N5 * m_dim.N6 * m_dim.N7 ; }
+
+  /* Span of the range space */
+  KOKKOS_INLINE_FUNCTION
+  constexpr size_type span() const
+    { return m_dim.N0 * m_stride ; }
+
+  KOKKOS_INLINE_FUNCTION constexpr bool span_is_contiguous() const
+    { return m_stride == m_dim.N7 * m_dim.N6 * m_dim.N5 * m_dim.N4 * m_dim.N3 * m_dim.N2 * m_dim.N1 ; }
+
+  /* Strides of dimensions */
+  KOKKOS_INLINE_FUNCTION constexpr size_type stride_7() const { return 1 ; }
+  KOKKOS_INLINE_FUNCTION constexpr size_type stride_6() const { return m_dim.N7 ; }
+  KOKKOS_INLINE_FUNCTION constexpr size_type stride_5() const { return m_dim.N7 * m_dim.N6 ; }
+  KOKKOS_INLINE_FUNCTION constexpr size_type stride_4() const { return m_dim.N7 * m_dim.N6 * m_dim.N5 ; }
+  KOKKOS_INLINE_FUNCTION constexpr size_type stride_3() const { return m_dim.N7 * m_dim.N6 * m_dim.N5 * m_dim.N4 ; }
+  KOKKOS_INLINE_FUNCTION constexpr size_type stride_2() const { return m_dim.N7 * m_dim.N6 * m_dim.N5 * m_dim.N4 * m_dim.N3 ; }
+  KOKKOS_INLINE_FUNCTION constexpr size_type stride_1() const { return m_dim.N7 * m_dim.N6 * m_dim.N5 * m_dim.N4 * m_dim.N3 * m_dim.N2 ; }
+  KOKKOS_INLINE_FUNCTION constexpr size_type stride_0() const { return m_stride ; }
+
+  // Stride with [ rank ] value is the total length
+  template< typename iType >
+  KOKKOS_INLINE_FUNCTION
+  void stride( iType * const s ) const
+    {
+      size_type n = 1 ;
+      if ( 7 < dimension_type::rank ) { s[7] = n ; n *= m_dim.N7 ; }
+      if ( 6 < dimension_type::rank ) { s[6] = n ; n *= m_dim.N6 ; }
+      if ( 5 < dimension_type::rank ) { s[5] = n ; n *= m_dim.N5 ; }
+      if ( 4 < dimension_type::rank ) { s[4] = n ; n *= m_dim.N4 ; }
+      if ( 3 < dimension_type::rank ) { s[3] = n ; n *= m_dim.N3 ; }
+      if ( 2 < dimension_type::rank ) { s[2] = n ; n *= m_dim.N2 ; }
+      if ( 1 < dimension_type::rank ) { s[1] = n ; }
+      if ( 0 < dimension_type::rank ) { s[0] = m_stride ; }
+      s[dimension_type::rank] = m_stride * m_dim.N0 ;
+    }
+
+private:
+
+  KOKKOS_INLINE_FUNCTION 
+  constexpr Index reverseScanExtent(const Index& i) const {
+    return i+1 == rankMorton ? 1 : reverseScanExtent(i+1) * extentsMorton[i+1];
+  }
+
+  template< std::size_t ... D, std::size_t ... I, 
+    std::size_t ... IJ, std::size_t ... TI >
+  KOKKOS_INLINE_FUNCTION constexpr ViewOffset
+    ( Kokkos::LayoutMortonRight<mBegin> const & arg_layout
+    , Kokkos::Impl::index_sequence<D...>
+    , Kokkos::Impl::index_sequence<I...>
+    , Kokkos::Impl::index_sequence<IJ...>
+    , Kokkos::Impl::index_sequence<TI...>
+    )
+    : m_dim( arg_layout.dimension[0] , arg_layout.dimension[1]
+           , arg_layout.dimension[2] , arg_layout.dimension[3]
+           , arg_layout.dimension[4] , arg_layout.dimension[5]
+           , arg_layout.dimension[6] , arg_layout.dimension[7]
+           )
+    , m_stride(m_dim.N1 * ( dimension_type::rank == 2 ? 1 :
+               m_dim.N2 * ( dimension_type::rank == 3 ? 1 :
+               m_dim.N3 * ( dimension_type::rank == 4 ? 1 :
+               m_dim.N4 * ( dimension_type::rank == 5 ? 1 :
+               m_dim.N5 * ( dimension_type::rank == 6 ? 1 :
+               m_dim.N6 * ( dimension_type::rank == 7 ? 1 : m_dim.N7 )))))) )
+    , extents{arg_layout.dimension[D]...}
+    , extentsMorton{arg_layout.dimension[mBegin+I]...}
+    , extentsExScan{reverseScanExtent(I)...} 
+    , strideMorton{extentsMorton[0]*extentsExScan[0]}
+    , nBlocks{Kokkos::Impl::countSetBits(extentsMorton[I])...}
+    , blockExtents{Kokkos::Impl::powerof2(extentsMorton[IJ/nBitsIndex],
+        nBlocks[IJ/nBitsIndex]-1-IJ%nBitsIndex)...}
+    , blockExtentsIncSum{(IJ%nBitsIndex ? 
+        blockExtents[IJ/nBitsIndex][IJ%nBitsIndex]*blockExtentsIncSum[IJ-1] : 
+        blockExtents[IJ/nBitsIndex][IJ%nBitsIndex])...}
+    , blockExtentsExcSum{(blockExtentsIncSum[IJ/nBitsIndex][IJ%nBitsIndex]-
+        blockExtents[IJ/nBitsIndex][IJ%nBitsIndex])...}
+    , blockMasks{(blockExtents[IJ/nBitsIndex][IJ%nBitsIndex]-1)...}
+    , blockNBits{Kokkos::Impl::countSetBits(blockMasks[IJ/nBitsIndex][IJ%nBitsIndex])...}
+    , table{insertZeros<Index>(TI%rowSizeTable,TI/rowSizeTable)...}
+    {}
+
+    template< class DimRHS, std::size_t ... D, std::size_t ... I, 
+      std::size_t ... IJ, std::size_t ... TI >
+    KOKKOS_INLINE_FUNCTION
+    constexpr ViewOffset( 
+      const ViewOffset< DimRHS , Kokkos::LayoutMortonRight<mBegin> , void > & rhs
+      , Kokkos::Impl::index_sequence<D...>
+      , Kokkos::Impl::index_sequence<I...>
+      , Kokkos::Impl::index_sequence<IJ...>
+      , Kokkos::Impl::index_sequence<TI...>
+        )
+      : m_dim( rhs.m_dim.N0 , rhs.m_dim.N1 , rhs.m_dim.N2 , rhs.m_dim.N3
+             , rhs.m_dim.N4 , rhs.m_dim.N5 , rhs.m_dim.N6 , rhs.m_dim.N7 )
+      , m_stride( rhs.stride_0() )
+      , extents{rhs.extents[D]...}
+      , extentsMorton{rhs.extentsMorton[I]...}
+      , extentsExScan{rhs.extentsExScan[I]...} 
+      , strideMorton{rhs.strideMorton}
+      , nBlocks{rhs.nBlocks[I]...}
+      , blockExtents{rhs.blockExtents[IJ/nBitsIndex][IJ%nBitsIndex]...}
+      , blockExtentsIncSum{rhs.blockExtentsIncSum[IJ/nBitsIndex][IJ%nBitsIndex]...}
+      , blockExtentsExcSum{rhs.blockExtentsExcSum[IJ/nBitsIndex][IJ%nBitsIndex]...}
+      , blockMasks{rhs.blockMasks[IJ/nBitsIndex][IJ%nBitsIndex]...}
+      , blockNBits{rhs.blockNBits[IJ/nBitsIndex][IJ%nBitsIndex]...}
+      , table{rhs.table[TI]...}
+      {
+        static_assert( int(DimRHS::rank) == int(dimension_type::rank) , 
+          "ViewOffset assignment requires equal rank" );
+        static_assert( nBitsEntry == std::decay<decltype(rhs)>::type::nBitsEntry, 
+          "ViewOffset assignment requires equal number of bits in lookup table");
+      }
+
+    /* --------------------------------------------------------------------------*/
+    /**
+     * @Synopsis  Find the index of the block given an index of the view
+     *
+     * @Param i Input index of the view of some dimension
+     * @Param iMortonDim Index of the encoded dimension 
+     *
+     * @Returns  Index of the block along the encoded dimension 
+     */
+    /* ----------------------------------------------------------------------------*/
+    KOKKOS_INLINE_FUNCTION
+    Index findBlock(const Index& i, const Index& iMortonDim) const {
+      Index iBlock = 0;
+      for(;blockExtentsIncSum[iMortonDim][iBlock] <= i && 
+        iBlock < nBlocks[iMortonDim];++iBlock) {}
+      return iBlock;
+    }
+
+public:
+
+  ViewOffset() = default ;
+  ViewOffset( const ViewOffset & ) = default ;
+  ViewOffset & operator = ( const ViewOffset & ) = default ;
+
+  template< unsigned TrivialScalarSize >
+  KOKKOS_INLINE_FUNCTION
+  constexpr ViewOffset
+    ( std::integral_constant<unsigned,TrivialScalarSize> const &
+    , Kokkos::LayoutMortonRight<mBegin> const & arg_layout
+    )
+    : ViewOffset(arg_layout, 
+        NonMortonSubset(), 
+        MortonIndices(), 
+        Kokkos::Impl::make_index_sequence<rankMorton*nBitsIndex>(),
+        Kokkos::Impl::make_index_sequence<rankMorton*rowSizeTable>())
+    {}
+
+  template< class DimRHS >
+  KOKKOS_INLINE_FUNCTION
+  constexpr ViewOffset( const ViewOffset< DimRHS , Kokkos::LayoutMortonRight<mBegin> , void > & rhs )
+    : ViewOffset(rhs, 
+        NonMortonSubset(), 
+        MortonIndices(), 
+        Kokkos::Impl::make_index_sequence<rankMorton*nBitsIndex>(),
+        Kokkos::Impl::make_index_sequence<rankMorton*rowSizeTable>())
+    {}
 };
 
 //----------------------------------------------------------------------------

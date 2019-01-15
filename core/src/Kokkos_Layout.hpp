@@ -124,6 +124,42 @@ struct LayoutRight {
     : dimension { N0 , N1 , N2 , N3 , N4 , N5 , N6 , N7 } {}
 };
 
+/* --------------------------------------------------------------------------*/
+/**
+ * @Synopsis  Memory layout tag indicating a Morton curve layout 
+ *
+ * The Morton curve maps multi-dimensional indices onto a one-dimensional index
+ * which indicates the offset to the beginning of the array
+ *
+ * The Morton encoding can be optionally applied to only a subset of the 
+ * dimension towards the right of the dimension list, which are defined by the 
+ * template parameters mBegin and mEnd 
+ *
+ * @tparam mBegin The beginning index of the subset of the dimensions where Morton 
+ * encoding is applied
+ */
+/* ----------------------------------------------------------------------------*/
+template < std::size_t mBegin = 0 > 
+struct LayoutMortonRight {
+  //! Tag this class as a kokkos array layout
+  typedef LayoutMortonRight array_layout ;
+
+  size_t dimension[ ARRAY_LAYOUT_MAX_RANK ];
+
+  enum { is_extent_constructible = true };
+
+  LayoutMortonRight( LayoutMortonRight const & ) = default ;
+  LayoutMortonRight( LayoutMortonRight && ) = default ;
+  LayoutMortonRight & operator = ( LayoutMortonRight const & ) = default ;
+  LayoutMortonRight & operator = ( LayoutMortonRight && ) = default ;
+
+  KOKKOS_INLINE_FUNCTION
+  explicit constexpr
+  LayoutMortonRight( size_t N0 = 0 , size_t N1 = 0 , size_t N2 = 0 , size_t N3 = 0
+             , size_t N4 = 0 , size_t N5 = 0 , size_t N6 = 0 , size_t N7 = 0 )
+    : dimension { N0 , N1 , N2 , N3 , N4 , N5 , N6 , N7 } {}
+};
+
 //----------------------------------------------------------------------------
 /// \struct LayoutStride
 /// \brief  Memory layout tag indicated arbitrarily strided
