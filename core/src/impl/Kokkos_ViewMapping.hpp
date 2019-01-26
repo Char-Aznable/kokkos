@@ -1846,10 +1846,7 @@ public:
 // LayoutMortonRight AND ( 1 < rank AND 0 < rank_dynamic )
 template < class Dimension, std::size_t mBegin >
 struct ViewOffset< Dimension , Kokkos::LayoutMortonRight<mBegin>
-                 , typename std::enable_if<( 1 < Dimension::rank
-                                             &&
-                                             0 < Dimension::rank_dynamic
-                                           )>::type >
+                 , typename std::enable_if<( mBegin+2 < Dimension::rank )>::type >
 {
   using is_mapping_plugin = std::true_type ;
   using is_regular        = std::false_type ;
@@ -1899,8 +1896,6 @@ struct ViewOffset< Dimension , Kokkos::LayoutMortonRight<mBegin>
   /* ----------------------------------------------------------------------------*/
   static constexpr std::size_t rankMorton = Dimension::rank - mBegin;
 
-  static_assert(rankMorton >= 2, "At least the last two dimension should be Morton encoded");
-
   /* --------------------------------------------------------------------------*/
   /**
    * @Synopsis  Rank corresponding to the number of dimensions not encoded
@@ -1918,14 +1913,14 @@ struct ViewOffset< Dimension , Kokkos::LayoutMortonRight<mBegin>
    * @Synopsis  Sizes of each non-encoded dimension
    */
   /* ----------------------------------------------------------------------------*/
-  const size_type extents[rankNonMorton];
+  size_type extents[rankNonMorton];
 
   /* --------------------------------------------------------------------------*/
   /**
    * @Synopsis  Sizes of the encoded dimension
    */
   /* ----------------------------------------------------------------------------*/
-  const Index extentsMorton[rankMorton];
+  Index extentsMorton[rankMorton];
 
   /* --------------------------------------------------------------------------*/
   /**
@@ -1936,21 +1931,21 @@ struct ViewOffset< Dimension , Kokkos::LayoutMortonRight<mBegin>
    * of {40, 30, 20}, i.e., the reverse of {1, 40, 40*30}, or {40*30,40,1}
    */
   /* ----------------------------------------------------------------------------*/
-  const size_type extentsExScan[rankMorton];
+  size_type extentsExScan[rankMorton];
 
   /* --------------------------------------------------------------------------*/
   /**
    * @Synopsis  Stride over all the encoded dimension
    */
   /* ----------------------------------------------------------------------------*/
-  const size_type strideMorton;
+  size_type strideMorton;
   
   /* --------------------------------------------------------------------------*/
   /**
    * @Synopsis  Number of blocks of each encoded dimension
    */
   /* ----------------------------------------------------------------------------*/
-  const Index nBlocks[rankMorton];
+  Index nBlocks[rankMorton];
 
   /* --------------------------------------------------------------------------*/
   /**
@@ -1962,21 +1957,21 @@ struct ViewOffset< Dimension , Kokkos::LayoutMortonRight<mBegin>
    * Any dimension that needs fewer than nBitsIndex to encode is padded with zero.
    */
   /* ----------------------------------------------------------------------------*/
-  const Index blockExtents[rankMorton][nBitsIndex];
+  Index blockExtents[rankMorton][nBitsIndex];
 
   /* --------------------------------------------------------------------------*/
   /**
    * @Synopsis Inclusive prefix sum of blockExtents 
    */
   /* ----------------------------------------------------------------------------*/
-  const Index blockExtentsIncSum[rankMorton][nBitsIndex];
+  Index blockExtentsIncSum[rankMorton][nBitsIndex];
 
   /* --------------------------------------------------------------------------*/
   /**
    * @Synopsis Exclusive prefix sum of blockExtents 
    */
   /* ----------------------------------------------------------------------------*/
-  const Index blockExtentsExcSum[rankMorton][nBitsIndex];
+  Index blockExtentsExcSum[rankMorton][nBitsIndex];
 
   /* --------------------------------------------------------------------------*/
   /**
@@ -1984,7 +1979,7 @@ struct ViewOffset< Dimension , Kokkos::LayoutMortonRight<mBegin>
    * contributed to the encoding 
    */
   /* ----------------------------------------------------------------------------*/
-  const Index blockMasks[rankMorton][nBitsIndex];
+  Index blockMasks[rankMorton][nBitsIndex];
 
   /* --------------------------------------------------------------------------*/
   /**
@@ -1992,7 +1987,7 @@ struct ViewOffset< Dimension , Kokkos::LayoutMortonRight<mBegin>
    * dimension 
    */
   /* ----------------------------------------------------------------------------*/
-  const Index blockNBits[rankMorton][nBitsIndex];
+  Index blockNBits[rankMorton][nBitsIndex];
 
   /* --------------------------------------------------------------------------*/
   /**
@@ -2001,7 +1996,7 @@ struct ViewOffset< Dimension , Kokkos::LayoutMortonRight<mBegin>
    * 
    */
   /* ----------------------------------------------------------------------------*/
-  const Index table[rankMorton][rowSizeTable];
+  Index table[rankMorton][rowSizeTable];
 
 private:
 
