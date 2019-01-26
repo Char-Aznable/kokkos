@@ -1846,7 +1846,7 @@ public:
 // LayoutMortonRight AND ( 1 < rank AND 0 < rank_dynamic )
 template < class Dimension, std::size_t mBegin >
 struct ViewOffset< Dimension , Kokkos::LayoutMortonRight<mBegin>
-                 , typename std::enable_if<( mBegin+2 < Dimension::rank )>::type >
+                 , typename std::enable_if<( mBegin+2 <= Dimension::rank )>::type >
 {
   using is_mapping_plugin = std::true_type ;
   using is_regular        = std::false_type ;
