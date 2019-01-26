@@ -1913,7 +1913,7 @@ struct ViewOffset< Dimension , Kokkos::LayoutMortonRight<mBegin>
    * @Synopsis  Sizes of each non-encoded dimension
    */
   /* ----------------------------------------------------------------------------*/
-  size_type extents[rankNonMorton];
+  size_type extents[Dimension::rank];
 
   /* --------------------------------------------------------------------------*/
   /**
