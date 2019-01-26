@@ -2045,7 +2045,7 @@ private:
     const Index indices[] = {std::get<i>(std::forward<T>(t))...};
     const Index iBlocks[] = {findBlock(indices[I],I)...};
     //Promote the type here to avoid overflow
-    const Encode iOffsets[] = {blockExtentsExcSum[I][iBlocks[I]]...};
+    const Index iOffsets[] = {blockExtentsExcSum[I][iBlocks[I]]...};
     const Encode iBlockSizes[] = {blockExtents[I][iBlocks[I]]...};
     const Encode iBlockSizesCumProd[] = { (I ? iBlockSizes[I-1]*iBlockSizesCumProd[I-1] : 1)... };
     const Encode dotProduct[] = { (iOffsets[I]*extentsExScan[I]*iBlockSizesCumProd[I]+
@@ -2053,7 +2053,7 @@ private:
     const Encode blockOffset = dotProduct[sizeof...(I)-1];
     //Remove the upper bits for each dimension corresponding to the previous blocks
     //These are the bits to be interleaved
-    Index iBits[] = {(indices[I]-iOffsets[I])...};
+    Index iBits[] = {static_cast<Index>(indices[I]-iOffsets[I])...};
     //Mask for how many bits to contribute
     Index iMasks[] = {blockMasks[I][iBlocks[I]]...};
     //Total number of bits in the maks
