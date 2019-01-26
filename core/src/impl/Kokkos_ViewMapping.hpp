@@ -1996,7 +1996,7 @@ struct ViewOffset< Dimension , Kokkos::LayoutMortonRight<mBegin>
    * 
    */
   /* ----------------------------------------------------------------------------*/
-  Index table[rankMorton][rowSizeTable];
+  Encode table[rankMorton][rowSizeTable];
 
 private:
 
@@ -2199,18 +2199,17 @@ private:
                m_dim.N5 * ( dimension_type::rank == 6 ? 1 :
                m_dim.N6 * ( dimension_type::rank == 7 ? 1 : m_dim.N7 )))))) )
     , extents{arg_layout.dimension[D]...}
-    , extentsMorton{arg_layout.dimension[mBegin+I]...}
+    , extentsMorton{static_cast<Index>(arg_layout.dimension[mBegin+I])...}
     , extentsExScan{reverseScanExtent(I)...} 
     , strideMorton{extentsMorton[0]*extentsExScan[0]}
     , nBlocks{Kokkos::Impl::countSetBits(extentsMorton[I])...}
     , blockExtents{Kokkos::Impl::powerof2(extentsMorton[IJ/nBitsIndex],
-        nBlocks[IJ/nBitsIndex]-1-IJ%nBitsIndex)...}
-    , blockExtentsIncSum{(IJ%nBitsIndex ? 
-        blockExtents[IJ/nBitsIndex][IJ%nBitsIndex]*blockExtentsIncSum[IJ-1] : 
+        static_cast<Index>(nBlocks[IJ/nBitsIndex]-1-IJ%nBitsIndex))...}
+    , blockExtentsIncSum{static_cast<Index>(blockExtents[IJ/nBitsIndex][IJ%nBitsIndex] *
+        (IJ%nBitsIndex ? blockExtentsIncSum[IJ/nBitsIndex][IJ%nBitsIndex-1] : 1))...}
+    , blockExtentsExcSum{static_cast<Index>(blockExtentsIncSum[IJ/nBitsIndex][IJ%nBitsIndex]-
         blockExtents[IJ/nBitsIndex][IJ%nBitsIndex])...}
-    , blockExtentsExcSum{(blockExtentsIncSum[IJ/nBitsIndex][IJ%nBitsIndex]-
-        blockExtents[IJ/nBitsIndex][IJ%nBitsIndex])...}
-    , blockMasks{(blockExtents[IJ/nBitsIndex][IJ%nBitsIndex]-1)...}
+    , blockMasks{static_cast<Index>(blockExtents[IJ/nBitsIndex][IJ%nBitsIndex]-1)...}
     , blockNBits{Kokkos::Impl::countSetBits(blockMasks[IJ/nBitsIndex][IJ%nBitsIndex])...}
     , table{insertZeros<Index>(TI%rowSizeTable,TI/rowSizeTable)...}
     {}
