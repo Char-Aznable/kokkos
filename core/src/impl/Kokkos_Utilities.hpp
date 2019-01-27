@@ -527,7 +527,7 @@ using UINT =
 template < class T > KOKKOS_INLINE_FUNCTION
 constexpr typename std::enable_if<std::is_integral<T>::value, UINT<64>>::type 
 insertZeros(const T& i, const T& nZeros, const T& nBits = sizeof(T)*CHAR_BIT) {
-  return i & T{1} | (nBits == 1 ? 0 : insertZeros<T>(i >> 1, nZeros, nBits-1) << nZeros+1);
+  return (i & T{1}) | (nBits == 1 ? 0 : insertZeros<T>(i >> 1, nZeros, nBits-1) << nZeros+1);
 }
 
 }} // namespace Kokkos::Impl

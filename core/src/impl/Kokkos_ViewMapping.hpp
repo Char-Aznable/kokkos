@@ -1931,14 +1931,14 @@ struct ViewOffset< Dimension , Kokkos::LayoutMortonRight<mBegin>
    * of {40, 30, 20}, i.e., the reverse of {1, 40, 40*30}, or {40*30,40,1}
    */
   /* ----------------------------------------------------------------------------*/
-  size_type extentsExScan[rankMorton];
+  Encode extentsExScan[rankMorton];
 
   /* --------------------------------------------------------------------------*/
   /**
    * @Synopsis  Stride over all the encoded dimension
    */
   /* ----------------------------------------------------------------------------*/
-  size_type strideMorton;
+  Encode strideMorton;
   
   /* --------------------------------------------------------------------------*/
   /**
@@ -2000,9 +2000,28 @@ struct ViewOffset< Dimension , Kokkos::LayoutMortonRight<mBegin>
 
 private:
 
+  using Indices = Kokkos::Impl::make_index_sequence<Dimension::rank>;
   using NonMortonSubset = Kokkos::Impl::make_index_sequence<rankNonMorton>;
   using MortonIndices = Kokkos::Impl::make_index_sequence<rankMorton>;
   using MortonSubset = typename Kokkos::Impl::AddToSequence<mBegin,MortonIndices>::Type;
+
+  /* --------------------------------------------------------------------------*/
+  /**
+   * @Synopsis  Get the offset of a encoded slice 
+   *
+   * This simply returns zero because all dimensions are morton encoded
+   *
+   * @tparam T std::tuple<> of indices as the input to ViewOffset<>::operator()
+   * @Param t std::tuple<> of indices as the input to ViewOffset<>::operator()
+   * @Param Kokkos::Impl::index_sequence Index sequence corresponding to the 
+   * non-encoded dimensions
+   *
+   * @Returns  zero 
+   */
+  /* ----------------------------------------------------------------------------*/
+  template < class T > KOKKOS_INLINE_FUNCTION 
+  size_type getOffset(T&& t, Kokkos::Impl::index_sequence<>) const
+  { return size_type{0}; }
 
   /* --------------------------------------------------------------------------*/
   /**
@@ -2013,6 +2032,7 @@ private:
    * strideMorton * (i3 + i2*N3 + i1*N2*N3 + i0*N1*N2*N3)
    *
    * @tparam T std::tuple<> of indices as the input to ViewOffset<>::operator()
+   * @tparam i0 First index of the non-encoded dimensions
    * @tparam i Index sequence corresponding to the non-encoded dimensions
    * @Param t std::tuple<> of indices as the input to ViewOffset<>::operator()
    * @Param Kokkos::Impl::index_sequence Index sequence corresponding to the 
@@ -2021,16 +2041,16 @@ private:
    * @Returns  Offset of the encoded slice 
    */
   /* ----------------------------------------------------------------------------*/
-  template < class T, std::size_t ... i > KOKKOS_INLINE_FUNCTION 
-  typename std::enable_if<std::is_same<Kokkos::Impl::index_sequence<i...>,
-    NonMortonSubset>::value,Encode>::type 
-  getOffset(T&& t, Kokkos::Impl::index_sequence<i...>) const
+  template < class T, std::size_t i0, std::size_t ... i > KOKKOS_INLINE_FUNCTION 
+  typename std::enable_if<std::is_same<Kokkos::Impl::index_sequence<i0,i...>,
+    NonMortonSubset>::value,size_type>::type 
+  getOffset(T&& t, Kokkos::Impl::index_sequence<i0,i...>) const
   {
-    using Swallow = Encode[];
+    using Swallow = size_type[];
     //Assume i... begins with 0
-    const Swallow s = { (i ? std::get<i>(std::forward<T>(t)) + extents[i]*s[i-1] : 
-      std::get<i>(std::forward<T>(t)))... };
-    return strideMorton * s[sizeof...(i)-1];
+    const Swallow s = { static_cast<size_type>(std::get<i0>(std::forward<T>(t))), 
+      static_cast<size_type>(std::get<i>(std::forward<T>(t)) + extents[i]*s[i-1])... };
+    return strideMorton * s[sizeof...(i)];
   }
 
   template < class T, std::size_t ... i, std::size_t ... I > KOKKOS_INLINE_FUNCTION 
@@ -2042,7 +2062,7 @@ private:
     //Compute the linear offset of the encoded dimensions in the whole span of this array 
     const Encode rankOffset = getOffset(std::forward<T>(t),NonMortonSubset());
     //Compute the linear offset within the current block
-    const Index indices[] = {std::get<i>(std::forward<T>(t))...};
+    const Index indices[] = {static_cast<Index>(std::get<i>(std::forward<T>(t)))...};
     const Index iBlocks[] = {findBlock(indices[I],I)...};
     //Promote the type here to avoid overflow
     const Index iOffsets[] = {blockExtentsExcSum[I][iBlocks[I]]...};
@@ -2093,7 +2113,7 @@ private:
         //This check help skip splitting 0 integer -- note that
         //it can still contribute bits even if iBits[iDim] == 0
         if(iBits[iDim] != 0) {
-          ans |= Encode(table[nDim][iBits[iDim]&mask] << (nPlaces+nDimRemaining));
+          ans |= Encode(table[nDim-1][iBits[iDim]&mask] << (nPlaces+nDimRemaining));
         }
         iBits[iDim] = iBits[iDim] >> nBits;
         iMasks[iDim] = iMasks[iDim] >> nBits;
@@ -2109,7 +2129,10 @@ public:
 
   //----------------------------------------
   template< class ... I > KOKKOS_INLINE_FUNCTION 
-  constexpr Encode operator()( const I&... i ) const {
+  constexpr typename std::enable_if<(sizeof...(I)==Dimension::rank) && 
+    std::is_integral<typename std::common_type<I...>::type>::value,
+    Encode>::type
+  operator()( const I&... i ) const {
     return encode(std::make_tuple(i...),MortonSubset{},MortonIndices{});
   }
 
@@ -2174,7 +2197,7 @@ public:
 private:
 
   KOKKOS_INLINE_FUNCTION 
-  constexpr Index reverseScanExtent(const Index& i) const {
+  constexpr Encode reverseScanExtent(const Index& i) const {
     return i+1 == rankMorton ? 1 : reverseScanExtent(i+1) * extentsMorton[i+1];
   }
 
@@ -2205,8 +2228,9 @@ private:
     , nBlocks{Kokkos::Impl::countSetBits(extentsMorton[I])...}
     , blockExtents{Kokkos::Impl::powerof2(extentsMorton[IJ/nBitsIndex],
         static_cast<Index>(nBlocks[IJ/nBitsIndex]-1-IJ%nBitsIndex))...}
-    , blockExtentsIncSum{static_cast<Index>(blockExtents[IJ/nBitsIndex][IJ%nBitsIndex] *
-        (IJ%nBitsIndex ? blockExtentsIncSum[IJ/nBitsIndex][IJ%nBitsIndex-1] : 1))...}
+    , blockExtentsIncSum{static_cast<Index>(
+        blockExtents[IJ/nBitsIndex][IJ%nBitsIndex] + 
+        (IJ%nBitsIndex ? blockExtentsIncSum[IJ/nBitsIndex][IJ%nBitsIndex-1] : 0))...}
     , blockExtentsExcSum{static_cast<Index>(blockExtentsIncSum[IJ/nBitsIndex][IJ%nBitsIndex]-
         blockExtents[IJ/nBitsIndex][IJ%nBitsIndex])...}
     , blockMasks{static_cast<Index>(blockExtents[IJ/nBitsIndex][IJ%nBitsIndex]-1)...}
@@ -2276,7 +2300,7 @@ public:
     , Kokkos::LayoutMortonRight<mBegin> const & arg_layout
     )
     : ViewOffset(arg_layout, 
-        NonMortonSubset(), 
+        Indices(), 
         MortonIndices(), 
         Kokkos::Impl::make_index_sequence<rankMorton*nBitsIndex>(),
         Kokkos::Impl::make_index_sequence<rankMorton*rowSizeTable>())
@@ -2286,7 +2310,7 @@ public:
   KOKKOS_INLINE_FUNCTION
   constexpr ViewOffset( const ViewOffset< DimRHS , Kokkos::LayoutMortonRight<mBegin> , void > & rhs )
     : ViewOffset(rhs, 
-        NonMortonSubset(), 
+        Indices(), 
         MortonIndices(), 
         Kokkos::Impl::make_index_sequence<rankMorton*nBitsIndex>(),
         Kokkos::Impl::make_index_sequence<rankMorton*rowSizeTable>())
