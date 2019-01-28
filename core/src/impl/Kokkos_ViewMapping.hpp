@@ -1992,7 +1992,8 @@ struct ViewOffset< Dimension , Kokkos::LayoutMortonRight<mBegin>
   /* --------------------------------------------------------------------------*/
   /**
    * @Synopsis  Lookup table whose entry (i,j) is the j'th bit pattern (out of 
-   * a total of 2^nBitsEntry) 
+   * a total of 2^nBitsEntry) that are inserted by i zeros between each pair of 
+   * neighboring bits. For example, table[1][3] == 0b101
    * 
    */
   /* ----------------------------------------------------------------------------*/
@@ -2053,6 +2054,47 @@ private:
     return strideMorton * s[sizeof...(i)];
   }
 
+  /* --------------------------------------------------------------------------*/
+  /**
+   * @Synopsis  Compute the offset for a multidimensional index
+   *
+   * This combines 3 aspects of the offset calculation: offset of the entire 
+   * Morton slice, offset of the power-of-2 block and the Morton code with in 
+   * the power-of-2 block. 
+   *
+   * The slice offset is computed by getOffset that is basically the layout
+   * right offset. 
+   *
+   * The block offset also assumes layout right but it's the layout of the
+   * previous power-of-2 blocks, which means that only the previous block sizes
+   * enters the calculation but the current block sizes need to be accounted
+   * for. The block offset thus is a 3-way dot product between the offset of
+   * the block, the total sizes of the Morton slice and the current block
+   * sizes. For example, if indices == {i0,i1,i2}, and extentsMorton == {s0,s1,s2}
+   * and blockSizes == {b0,b1,b2}, then blockOffset = i0*s1*s2 + b0*i1*s2 + b0*b1*i2 
+   *
+   * The Morton encoding within the block is done by looup table similar to
+   * what is implemented in https://github.com/kevinhartman/morton-nd.
+   * Basically, each component of the input index is first stripped off the 
+   * higher bits corresponding to the previous blocks. The remaining bits are 
+   * then interleaved. Because each component can contribute different number 
+   * of bits to the interleaving, we start with the one that has the least number
+   * of bits (and the less of nBitsIndex) and exhaust it. Whenever a component 
+   * exhausts its bits, it drops out of the loop and the number of components 
+   * is decreased by 1.
+   *
+   * Finally, the 3 offsets are combined to get the answer.
+   *
+   * @tparam T Tuple type that contains the input index
+   * @tparam i Index sequence MortonSubset
+   * @tparam I Index sequence MortonIndices
+   * @Param t Tuple that contains the input index
+   * @Param Kokkos::Impl::index_sequence Index sequence MortonSubset
+   * @Param Kokkos::Impl::index_sequence Index sequence MortonIndices
+   *
+   * @Returns  Offset in the array 
+   */
+  /* ----------------------------------------------------------------------------*/
   template < class T, std::size_t ... i, std::size_t ... I > KOKKOS_INLINE_FUNCTION 
   typename std::enable_if<std::is_same<Kokkos::Impl::index_sequence<i...>,
     MortonSubset>::value && std::is_same<Kokkos::Impl::index_sequence<I...>, 
