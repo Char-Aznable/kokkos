@@ -2059,70 +2059,13 @@ private:
     MortonIndices>::value, Encode>::type 
   encode(T&& t, Kokkos::Impl::index_sequence<i...>, Kokkos::Impl::index_sequence<I...>) const
   {
-    //Compute the linear offset of the encoded dimensions in the whole span of this array 
-    const Encode rankOffset = getOffset(std::forward<T>(t),NonMortonSubset());
-    //Compute the linear offset within the current block
     const Index indices[] = {static_cast<Index>(std::get<i>(std::forward<T>(t)))...};
-    const Index iBlocks[] = {findBlock(indices[I],I)...};
-    //Promote the type here to avoid overflow
-    const Index iOffsets[] = {blockExtentsExcSum[I][iBlocks[I]]...};
-    const Encode iBlockSizes[] = {blockExtents[I][iBlocks[I]]...};
-    const Encode iBlockSizesCumProd[] = { (I ? iBlockSizes[I-1]*iBlockSizesCumProd[I-1] : 1)... };
-    Encode blockOffset = iOffsets[0]*extentsExScan[0]*iBlockSizesCumProd[0];
-    for(size_type id = 1; id < sizeof...(I); ++id) {
-      blockOffset += iOffsets[id]*extentsExScan[id]*iBlockSizesCumProd[id];
-    }
-    //Remove the upper bits for each dimension corresponding to the previous blocks
-    //These are the bits to be interleaved
-    Index iBits[] = {static_cast<Index>(indices[I]-iOffsets[I])...};
-    //Mask for how many bits to contribute
-    Index iMasks[] = {blockMasks[I][iBlocks[I]]...};
-    //Total number of bits in the maks
-    Index iNBits[] = {blockNBits[I][iBlocks[I]]...};
 
-    //Iteratively interleave the indices until no bits left
-    //number of bit places at the end of last iteration
-    size_type nPlaces = 0;
-    Encode ans = 0;
-    while(true) {
-      //How many dimensions contributing to the interleaving
-      size_type nDim = sizeof...(I);
-      //common mask this iteration
-      Index mask = ~Index{0};
-      //number of bits in the mask
-      Index nBits = nBitsIndex;
-      //Get the common mask
-      for(size_type iDim = 0; iDim < sizeof...(I); ++iDim) {
-        if(iMasks[iDim] == 0) {
-          --nDim;
-        } else {
-          mask &= iMasks[iDim];
-          nBits = std::min(iNBits[iDim],nBits);
-        }
-      }
-      if(nDim == 0) { break; }
-      size_type nDimRemaining = nDim;
-      //Interleave the bits -- the order conforms to right layout
-      //where a dimension with smaller index contributes bits
-      //to higher places in the results than any other dimension 
-      //with larger index. For example, if iBits == {100, 001, 010}, 
-      //ans = 0b100001010 
-      for(size_type iDim = 0; iDim < sizeof...(I); ++iDim) {
-        //Skip the dimensions that are not contributing 
-        if(iNBits[iDim] == 0) { continue; }
-        --nDimRemaining;
-        //This check help skip splitting 0 integer -- note that
-        //it can still contribute bits even if iBits[iDim] == 0
-        if(iBits[iDim] != 0) {
-          ans |= Encode(table[nDim-1][iBits[iDim]&mask] << (nPlaces+nDimRemaining));
-        }
-        iBits[iDim] = iBits[iDim] >> nBits;
-        iMasks[iDim] = iMasks[iDim] >> nBits;
-        iNBits[iDim] -= nBits;
-      }
-      nPlaces += nDim*nBits;
+    Encode ans{0};
+    for(size_type iDim = 0; iDim < sizeof...(I); ++iDim) {
+      ans |= table[iDim][indices[iDim]];
     }
-    return ans + blockOffset + rankOffset; 
+    return ans; 
   }
 
 
@@ -2236,7 +2179,7 @@ private:
         blockExtents[IJ/nBitsIndex][IJ%nBitsIndex])...}
     , blockMasks{static_cast<Index>(blockExtents[IJ/nBitsIndex][IJ%nBitsIndex]-1)...}
     , blockNBits{Kokkos::Impl::countSetBits(blockMasks[IJ/nBitsIndex][IJ%nBitsIndex])...}
-    , table{insertZeros<Index>(TI%rowSizeTable,TI/rowSizeTable)...}
+    , table{(insertZeros<Index>(TI%rowSizeTable,rankMorton-1)<<(rankMorton-1-TI/rowSizeTable))...}
     {}
 
     template< class DimRHS, std::size_t ... D, std::size_t ... I, 
