@@ -2068,9 +2068,10 @@ private:
     const Index iOffsets[] = {blockExtentsExcSum[I][iBlocks[I]]...};
     const Encode iBlockSizes[] = {blockExtents[I][iBlocks[I]]...};
     const Encode iBlockSizesCumProd[] = { (I ? iBlockSizes[I-1]*iBlockSizesCumProd[I-1] : 1)... };
-    const Encode dotProduct[] = { (iOffsets[I]*extentsExScan[I]*iBlockSizesCumProd[I]+
-      (I ? dotProduct[I-1] :0))... };
-    const Encode blockOffset = dotProduct[sizeof...(I)-1];
+    Encode blockOffset = iOffsets[0]*extentsExScan[0]*iBlockSizesCumProd[0];
+    for(size_type id = 1; id < sizeof...(I); ++id) {
+      blockOffset += iOffsets[id]*extentsExScan[id]*iBlockSizesCumProd[id];
+    }
     //Remove the upper bits for each dimension corresponding to the previous blocks
     //These are the bits to be interleaved
     Index iBits[] = {static_cast<Index>(indices[I]-iOffsets[I])...};
